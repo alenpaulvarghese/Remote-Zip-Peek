@@ -1,5 +1,5 @@
+use crate::error::{Error, Result};
 use crate::http_reader::RemoteHttpReader;
-use anyhow::{anyhow, Result};
 use async_zip::base::read::seek::ZipFileReader;
 use serde::Serialize;
 use tokio::io::BufReader;
@@ -160,18 +160,18 @@ impl ZipExplorer {
             .entries()
             .iter()
             .position(|e| e.filename().as_str().unwrap_or("") == path)
-            .ok_or_else(|| anyhow!("File not found"))?;
+            .ok_or_else(|| Error::FileNotFound(path))?;
 
         // Use async-stream to create a stream that owns the reader
         let stream = async_stream::try_stream! {
-            let entry_reader = reader.reader_without_entry(index).await.map_err(|e| anyhow::Error::from(e))?;
+            let entry_reader = reader.reader_without_entry(index).await.map_err(|e| Error::Zip(e.to_string()))?;
             use tokio::io::AsyncReadExt;
             use tokio_util::compat::FuturesAsyncReadCompatExt;
             let mut compat_reader = entry_reader.compat();
 
-            let mut buffer = [0u8; 65536]; // 64KB buffer
+            let mut buffer = [0u8; 262144]; // 256KB buffer
             loop {
-                let n = compat_reader.read(&mut buffer).await.map_err(|e| anyhow::Error::from(e))?;
+                let n = compat_reader.read(&mut buffer).await.map_err(|e| Error::Io(e))?;
                 if n == 0 {
                     break;
                 }

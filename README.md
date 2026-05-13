@@ -1,66 +1,112 @@
-# Remote ZIP Explorer
+# Lazy ZIP Explorer
 
-**Explore and download files from remote ZIP archives without downloading the entire archive.**
+**Explore and download files from remote ZIP archives — without downloading the entire archive.**
 
-`remote-zip-explorer` is a Rust-based TUI (Terminal User Interface) tool that allows you to inspect the contents of a remote ZIP file using HTTP Range requests. It fetches only the necessary metadata to show you the file tree and allows you to download specific files on demand.
+Lazy ZIP Explorer uses HTTP Range requests to read only the ZIP metadata, letting you browse and selectively download files from multi-gigabyte archives while fetching just a few kilobytes of data.
 
-## Features
+## Desktop App
 
--   **Interactive TUI**: Navigate large ZIP archives easily with a file-tree explorer.
--   **On-demand Downloads**: Download only the files you need from the archive.
--   **Bandwidth Efficient**: Lists contents of gigabyte-sized archives by fetching only a few kilobytes of metadata.
--   **High Performance**: Uses an optimized 1MB buffer for fast remote streaming and downloads.
--   **Workspace Based**: Cleanly separated core logic (`core`) and TUI implementation (`cli`).
+A cross-platform desktop application built with [Tauri](https://tauri.app/) + [Svelte](https://svelte.dev/).
 
-## Installation
+### Features
 
-Ensure you have [Rust installed](https://www.rust-lang.org/tools/install).
+- **Browse remote ZIPs** — paste a URL and instantly see the file tree
+- **Selective downloads** — download individual files or entire folders
+- **Concurrent workers** — configurable parallel downloads (default: 10 workers)
+- **Smart skip** — detects existing files and lets you skip or re-download
+- **Bandwidth stats** — shows total ZIP size vs. data actually fetched
+- **Dark mode** — premium dark UI with indigo accents
+
+### Download
+
+Grab the latest release for your platform from the [Releases](https://github.com/AlenPaulVarworkunity/lazy-zip/releases) page:
+
+| Platform | Format |
+|----------|--------|
+| macOS (Apple Silicon) | `.dmg` |
+| macOS (Intel) | `.dmg` |
+| Windows | `.msi` / `.exe` |
+| Linux | `.deb` / `.AppImage` |
+
+### Build from source
 
 ```bash
-git clone https://github.com/yourusername/remote-zip-explorer.git
-cd remote-zip-explorer
-cargo build --release
+# Prerequisites: Rust, Node.js 20+
+git clone https://github.com/alenpaulvarghese/lazy-zip.git
+cd lazy-zip/desktop
+npm install
+npm run tauri build
 ```
 
-## Usage
+---
 
-Run the tool by providing the URL of the ZIP file you want to explore, or enter it manually in the TUI.
+## CLI (TUI)
+
+A terminal interface built with `ratatui`.
 
 ```bash
-# Start with a URL
-cargo run -p remote-zip-cli -- <URL>
+# Run with a URL
+cargo run -p lazy-zip-cli -- <URL>
 
-# Start and enter URL in the interface
-cargo run -p remote-zip-cli
+# Or start and enter URL interactively
+cargo run -p lazy-zip-cli
 ```
 
 ### Controls
 
--   **Arrow Up/Down**: Navigate the file list.
--   **Enter**:
-    -   On a folder: Expand or collapse the directory.
-    -   On a file: Start downloading the file to your current directory.
--   **'q'**: Quit the application.
--   **Esc**: Return to the URL input screen or exit error states.
+- **Arrow Up/Down** — navigate the file list
+- **Enter** — expand/collapse folders, or download a file
+- **q** — quit
+- **Esc** — return to URL input
+
+---
+
+## Python Library
+
+A synchronous Python library for scripting.
+
+```bash
+pip install maturin
+cd lazy-zip
+maturin develop
+```
+
+```python
+import lazy_zip
+
+with lazy_zip.RemoteZip("https://example.com/files.zip") as z:
+    for entry in z.files:
+        print(entry.name, entry.size, entry.is_dir)
+
+    data = z.read("path/in/zip/file.txt")
+    z.read_to_file("path/in/zip/file.txt", "/tmp/output.txt")
+```
+
+---
 
 ## How It Works
 
-ZIP files store their directory structure (the Central Directory) at the *end* of the file. `remote-zip-explorer` uses **HTTP Range requests** to:
-1.  Fetch the last few bytes of the file to locate the Central Directory.
-2.  Fetch only the Central Directory range to build the local file tree.
-3.  When a download is requested, it streams only the specific range of the file where the compressed data is stored.
+ZIP files store their Central Directory at the **end** of the file. Lazy ZIP uses HTTP Range requests to:
 
-This approach makes it possible to explore a 10GB ZIP file by downloading only a few kilobytes, and then selectively download a 5MB file from it without ever touching the other 9.995GB.
+1. Fetch the last few bytes to locate the Central Directory
+2. Fetch only the Central Directory to build the file tree
+3. When downloading, stream only the specific byte range for that file
+
+This means you can explore a **10 GB** ZIP by downloading only a few **kilobytes**, then selectively download a 5 MB file without touching the other 9.995 GB.
 
 ## Project Structure
 
--   `core/`: Library containing the `RemoteHttpReader` and `ZipExplorer` logic.
--   `cli/`: TUI application built with `ratatui` and `crossterm`.
+| Crate | Description |
+|-------|-------------|
+| `core/` | `lazy-zip-core` — HTTP reader, ZIP explorer, downloader |
+| `cli/` | `lazy-zip-cli` — Terminal UI with ratatui |
+| `desktop/` | Tauri + SvelteKit desktop app |
+| `python/` | PyO3 Python bindings |
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ## Keywords & Tags
 
-`rust`, `zip`, `cli`, `tui`, `ratatui`, `http-range`, `remote-file`, `partial-download`, `bandwidth-saver`, `list-zip-contents`, `cloud-zip-viewer`
+`rust`, `zip`, `tauri`, `svelte`, `cli`, `tui`, `http-range`, `remote-file`, `partial-download`, `bandwidth-saver`, `desktop-app`

@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use crate::error::{Error, Result};
 use futures::future::BoxFuture;
 use futures::task::{Context, Poll};
 use reqwest::Client;
@@ -18,7 +18,7 @@ pub struct RemoteHttpReader {
 
 enum State {
     Idle,
-    Requesting(BoxFuture<'static, Result<(u64, Vec<u8>), std::io::Error>>), // returns start_pos, data
+    Requesting(BoxFuture<'static, std::result::Result<(u64, Vec<u8>), std::io::Error>>), // returns start_pos, data
     Buffered(Cursor<Vec<u8>>, u64),                                         // data, start_pos
 }
 
@@ -28,7 +28,7 @@ impl RemoteHttpReader {
         let head_resp = client.head(url).send().await?;
 
         if !head_resp.status().is_success() {
-            return Err(anyhow!("Failed to access URL: {}", head_resp.status()));
+            return Err(Error::UrlAccess(head_resp.status().to_string()));
         }
 
         let headers = head_resp.headers();
@@ -36,7 +36,7 @@ impl RemoteHttpReader {
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|val| val.to_str().ok())
             .and_then(|val| val.parse::<u64>().ok())
-            .ok_or_else(|| anyhow!("Failed to get Content-Length"))?;
+            .ok_or_else(|| Error::NoContentLength)?;
 
         Ok(Self {
             client,
@@ -54,6 +54,10 @@ impl RemoteHttpReader {
 
     pub fn get_content_length(&self) -> u64 {
         self.len
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
     }
 }
 

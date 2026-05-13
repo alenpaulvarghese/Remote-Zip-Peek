@@ -4,17 +4,16 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use lazy_zip_core::zip_explorer::FileNode;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
-    Frame,
-    Terminal,
+    Frame, Terminal,
 };
-use remote_zip_core::zip_explorer::FileNode;
-use std::{collections::HashSet, io};
+use std::io;
 
 pub fn init_terminal() -> io::Result<Terminal<CrosstermBackend<io::Stdout>>> {
     enable_raw_mode()?;
@@ -48,32 +47,72 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             f.render_widget(text, chunks[0]);
         }
         AppState::Loading => {
-            let text = Paragraph::new("Loading... Please wait.").block(Block::default().borders(Borders::ALL));
+            let text = Paragraph::new("Loading... Please wait.")
+                .block(Block::default().borders(Borders::ALL));
             f.render_widget(text, chunks[0]);
         }
-        AppState::Exploring | AppState::Downloading(..) => {
+        AppState::Exploring | AppState::Filtering | AppState::Downloading(..) => {
+            let current_path_str = if app.current_path.is_empty() {
+                "/".to_string()
+            } else {
+                format!("/{}", app.current_path.join("/"))
+            };
+
+            let title = if matches!(app.state, AppState::Filtering) {
+                format!(
+                    "Files - {} (Filter: {})",
+                    current_path_str, app.filter_input
+                )
+            } else if !app.filter_input.is_empty() {
+                format!(
+                    "Files - {} (Filter: {})",
+                    current_path_str, app.filter_input
+                )
+            } else {
+                format!("Files - {}", current_path_str)
+            };
+
             let items: Vec<ListItem> = app
                 .display_items
                 .iter()
                 .map(|i| {
-                    let indent = "  ".repeat(i.depth);
-                    let icon = if i.is_dir {
-                        if app.expanded_paths.contains(&i.path) {
-                            "📂 "
-                        } else {
-                            "📁 "
-                        }
+                    let icon = if i.name == ".." {
+                        "⬆️ "
+                    } else if i.is_dir {
+                        "📂 "
                     } else {
                         "📄 "
                     };
-                    let content = format!("{}{}{}", indent, icon, i.name);
+
+                    let size_str = if i.is_dir || i.name == ".." {
+                        "".to_string()
+                    } else {
+                        format!(" ({})", format_size(i.size))
+                    };
+
+                    let content = format!("{}{}{}", icon, i.name, size_str);
                     ListItem::new(content)
                 })
                 .collect();
 
+            let border_style = if matches!(app.state, AppState::Filtering) {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            };
+
             let list = List::new(items)
-                .block(Block::default().title("Files").borders(Borders::ALL))
-                .highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Yellow))
+                .block(
+                    Block::default()
+                        .title(title)
+                        .borders(Borders::ALL)
+                        .border_style(border_style),
+                )
+                .highlight_style(
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::Yellow),
+                )
                 .highlight_symbol("> ");
 
             f.render_stateful_widget(list, chunks[0], &mut app.list_state);
@@ -81,57 +120,120 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             // Status bar
             let status_text = match &app.state {
                 AppState::Downloading(name, curr, total) => {
-                    format!("Downloading: {} ({}/{})", name, curr, total)
+                    let pct = if *total > 0 {
+                        (*curr as f64 / *total as f64) * 100.0
+                    } else {
+                        0.0
+                    };
+                    format!(
+                        "Downloading: {} - {:.1}% ({}/{})",
+                        name,
+                        pct,
+                        format_size(*curr),
+                        format_size(*total)
+                    )
                 }
+                AppState::Filtering => "Type to filter, Enter to apply, Esc to cancel".to_string(),
                 _ => {
                     if let Some((msg, _)) = &app.message {
                         msg.clone()
                     } else {
-                        "Use Arrow Keys to navigate, Enter to open/download, q to quit".to_string()
+                        "Enter: Open/Download | '..': Back | '/': Filter | 'd': Download | 'q': Quit".to_string()
                     }
                 }
             };
-            
+
             let status = Paragraph::new(status_text).block(Block::default().borders(Borders::ALL));
             f.render_widget(status, chunks[1]);
-            
+
             // Overlay for downloading
-            if let AppState::Downloading(name, ..) = &app.state {
-                 let area = centered_rect(60, 20, f.size());
-                 let block = Block::default().title("Downloading").borders(Borders::ALL);
-                 let text = Paragraph::new(format!("Downloading {}...", name)).block(block);
-                 f.render_widget(Clear, area); // Clear background
-                 f.render_widget(text, area);
+            if let AppState::Downloading(name, curr, total) = &app.state {
+                let area = centered_rect(60, 20, f.size());
+                let block = Block::default().title("Downloading").borders(Borders::ALL);
+
+                let pct = if *total > 0 {
+                    (*curr as f64 / *total as f64) * 100.0
+                } else {
+                    0.0
+                };
+
+                let text = Paragraph::new(format!("Downloading {}\n{:.1}%", name, pct))
+                    .style(Style::default().fg(Color::Green))
+                    .block(block);
+                f.render_widget(Clear, area); // Clear background
+                f.render_widget(text, area);
             }
         }
         AppState::Error(msg) => {
-            let text = Paragraph::new(format!("Error: {}\nPress Esc to retry.", msg))
-                .block(Block::default().title("Error").borders(Borders::ALL).style(Style::default().fg(Color::Red)));
+            let text = Paragraph::new(format!("Error: {}\nPress Esc to retry.", msg)).block(
+                Block::default()
+                    .title("Error")
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(Color::Red)),
+            );
             f.render_widget(text, chunks[0]);
         }
     }
 }
 
 pub fn update_display_list(app: &mut App) {
-    app.display_items = flatten_tree(&app.root_nodes, &app.expanded_paths, 0);
-}
+    app.display_items.clear();
 
-fn flatten_tree(nodes: &[FileNode], expanded: &HashSet<String>, depth: usize) -> Vec<DisplayItem> {
-    let mut items = Vec::new();
-    for node in nodes {
-        items.push(DisplayItem {
-            name: node.name.clone(),
-            path: node.path.clone(),
-            is_dir: node.is_dir,
-            depth,
-            size: node.size,
+    // Add ".." if not root
+    if !app.current_path.is_empty() {
+        app.display_items.push(DisplayItem {
+            name: "..".to_string(),
+            is_dir: true,
+            size: 0,
         });
+    }
 
-        if node.is_dir && expanded.contains(&node.path) {
-            items.extend(flatten_tree(&node.children, expanded, depth + 1));
+    // Find children of current path
+    let mut current_nodes = &app.root_nodes;
+    for segment in &app.current_path {
+        if let Some(node) = current_nodes
+            .iter()
+            .find(|n| n.name == *segment && n.is_dir)
+        {
+            current_nodes = &node.children;
+        } else {
+            // Should not happen if path is valid
+            return;
         }
     }
-    items
+
+    for node in current_nodes {
+        if !app.filter_input.is_empty()
+            && !node
+                .name
+                .to_lowercase()
+                .contains(&app.filter_input.to_lowercase())
+        {
+            continue;
+        }
+
+        app.display_items.push(DisplayItem {
+            name: node.name.clone(),
+            is_dir: node.is_dir,
+            size: node.size,
+        });
+    }
+}
+
+fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
