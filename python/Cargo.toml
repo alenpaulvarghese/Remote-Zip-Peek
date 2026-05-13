@@ -1,0 +1,23 @@
+[package]
+name = "lazy-zip-py"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "lazy_zip"
+crate-type = ["cdylib"]
+
+[dependencies]
+lazy-zip-core = { path = "../core" }
+pyo3 = { version = "0.22", features = ["extension-module"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
+tokio-stream = "0.1"
+bytes = "1.0"
+
+[build-dependencies]
+pyo3-build-config = "0.22"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

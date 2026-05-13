@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-core:
+    name: Check Core & CLI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (core + cli)
+        run: cargo clippy -p lazy-zip-core -p lazy-zip-cli -- -D warnings
+
+      - name: Build (core + cli)
+        run: cargo build -p lazy-zip-core -p lazy-zip-cli --verbose
+
+      - name: Test (core + cli)
+        run: cargo test -p lazy-zip-core -p lazy-zip-cli --verbose
+
+  check-desktop:
+    name: Check Desktop
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (desktop)
+        run: cargo clippy -p desktop -- -D warnings
+
+      - name: Svelte check
+        working-directory: desktop
+        run: npm run check

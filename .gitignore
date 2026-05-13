@@ -1,1 +1,32 @@
+# Build artifacts
 /target
+**/target
+
+# Cargo
+Cargo.lock
+**/Cargo.lock
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+
+# Backup files
+*.bak
+*.tmp
+
+# Node / Frontend
+node_modules/
+desktop/build/
+desktop/.svelte-kit/
