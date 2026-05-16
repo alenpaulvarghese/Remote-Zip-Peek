@@ -33,7 +33,7 @@ impl ZipExplorer {
         let mut entries: Vec<(String, u64, u64, bool)> = Vec::new();
 
         for index in 0..reader.file().entries().len() {
-            let entry = reader.file().entries().get(index).unwrap();
+            let entry = &reader.file().entries()[index];
             let path = entry.filename().as_str().unwrap_or("unknown").to_string();
             let size = entry.uncompressed_size();
             let compressed_size = entry.compressed_size();
@@ -45,12 +45,6 @@ impl ZipExplorer {
         // Actually, sorting by path string is better to group them.
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 
-        // Build tree
-        // This is a simplified tree builder. For a robust one, we might need a map.
-        // Given the constraints, let's use a recursive approach or a map-based one.
-        // Since we need to return a Vec<FileNode> which represents the root level.
-
-        // Let's use a helper to insert into the tree.
         for (path, size, compressed_size, is_dir) in entries {
             let parts: Vec<&str> = path.trim_end_matches('/').split('/').collect();
             Self::insert_node(

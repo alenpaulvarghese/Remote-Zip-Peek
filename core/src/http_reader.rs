@@ -84,7 +84,7 @@ impl AsyncRead for RemoteHttpReader {
         buf: &mut ReadBuf<'_>,
     ) -> Poll<std::io::Result<()>> {
         loop {
-            let state = self.state.take().unwrap(); // Take state out
+            let state = self.state.take().unwrap_or(State::Idle);
             match state {
                 State::Idle => {
                     let start = self.pos;
