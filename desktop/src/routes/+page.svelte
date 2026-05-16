@@ -60,8 +60,8 @@
 
     try {
       scanResult = await invoke("scan_zip", { url });
-    } catch (err: any) {
-      errorMsg = err.toString();
+    } catch (err: unknown) {
+      errorMsg = err instanceof Error ? err.message : String(err);
     } finally {
       isLoading = false;
     }
@@ -136,20 +136,13 @@
         savePath,
       });
       showToast(`Downloaded "${node.name}" · ${formatBytes(node.size)}`);
-    } catch (err: any) {
-      errorMsg = `Download failed: ${err}`;
+    } catch (err: unknown) {
+      errorMsg = `Download failed: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
       const done = new Set(downloadingPaths);
       done.delete(node.path);
       downloadingPaths = done;
     }
-  }
-
-  function calcNodeSize(node: FileNode): number {
-    if (!node.is_dir) return node.size;
-    let s = 0;
-    for (const c of node.children) s += calcNodeSize(c);
-    return s;
   }
 
   async function downloadFolder(node: FileNode) {
@@ -208,12 +201,12 @@
           filePaths,
           workers: downloadWorkers,
         });
-        showToast(`Downloaded ${filePaths.length} file${filePaths.length !== 1 ? "s" : ""} · ${formatBytes(calcNodeSize(node))}`);
+        showToast(`Downloaded ${filePaths.length} file${filePaths.length !== 1 ? "s" : ""} · ${formatBytes(calcFolderSize(node))}`);
       } finally {
         unlisten();
       }
-    } catch (err: any) {
-      errorMsg = `Download failed: ${err}`;
+    } catch (err: unknown) {
+      errorMsg = `Download failed: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
       const done = new Set(downloadingPaths);
       done.delete(node.path);
