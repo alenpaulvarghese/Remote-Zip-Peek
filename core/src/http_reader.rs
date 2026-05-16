@@ -19,7 +19,7 @@ pub struct RemoteHttpReader {
 enum State {
     Idle,
     Requesting(BoxFuture<'static, std::result::Result<(u64, Vec<u8>), std::io::Error>>), // returns start_pos, data
-    Buffered(Cursor<Vec<u8>>, u64),                                         // data, start_pos
+    Buffered(Cursor<Vec<u8>>, u64), // data, start_pos
 }
 
 impl RemoteHttpReader {
@@ -90,7 +90,7 @@ impl AsyncRead for RemoteHttpReader {
                     let start = self.pos;
                     // Increase chunk size to 1MB to reduce HTTP request overhead and improve throughput
                     // especially for sequential reads like file downloads.
-                    let end = min(start + 1024 * 1024, self.len); 
+                    let end = min(start + 1024 * 1024, self.len);
 
                     if start >= self.len {
                         self.state = Some(State::Idle);
@@ -107,19 +107,16 @@ impl AsyncRead for RemoteHttpReader {
                             .header("Range", range)
                             .send()
                             .await
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                            .map_err(std::io::Error::other)?;
 
                         if !resp.status().is_success() {
-                            return Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
-                                format!("HTTP error: {}", resp.status()),
-                            ));
+                            return Err(std::io::Error::other(format!(
+                                "HTTP error: {}",
+                                resp.status()
+                            )));
                         }
 
-                        let bytes = resp
-                            .bytes()
-                            .await
-                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                        let bytes = resp.bytes().await.map_err(std::io::Error::other)?;
 
                         Ok((start, bytes.to_vec()))
                     };

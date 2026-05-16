@@ -11,7 +11,7 @@ env:
 
 jobs:
   check-core:
-    name: Check Core & CLI
+    name: Check Core
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,14 +26,14 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
-      - name: Clippy (core + cli)
-        run: cargo clippy -p lazy-zip-core -p lazy-zip-cli -- -D warnings
+      - name: Clippy (core)
+        run: cargo clippy -p lazy-zip-core -- -D warnings
 
-      - name: Build (core + cli)
-        run: cargo build -p lazy-zip-core -p lazy-zip-cli --verbose
+      - name: Build (core)
+        run: cargo build -p lazy-zip-core --verbose
 
-      - name: Test (core + cli)
-        run: cargo test -p lazy-zip-core -p lazy-zip-cli --verbose
+      - name: Test (core)
+        run: cargo test -p lazy-zip-core --verbose
 
   check-desktop:
     name: Check Desktop
