@@ -19,7 +19,7 @@ A cross-platform desktop application built with [Tauri](https://tauri.app/) + [S
 
 ### Download
 
-Grab the latest release for your platform from the [Releases](https://github.com/AlenPaulVarworkunity/lazy-zip/releases) page:
+Grab the latest release for your platform from the [Releases](https://github.com/alenpaulvarghese/Remote-Zip-Peek/releases) page:
 
 | Platform | Format |
 |----------|--------|
@@ -32,32 +32,11 @@ Grab the latest release for your platform from the [Releases](https://github.com
 
 ```bash
 # Prerequisites: Rust, Node.js 20+
-git clone https://github.com/alenpaulvarghese/lazy-zip.git
-cd lazy-zip/desktop
+git clone https://github.com/alenpaulvarghese/Remote-Zip-Peek.git
+cd Remote-Zip-Peek/desktop
 npm install
 npm run tauri build
 ```
-
----
-
-## CLI (TUI)
-
-A terminal interface built with `ratatui`.
-
-```bash
-# Run with a URL
-cargo run -p lazy-zip-cli -- <URL>
-
-# Or start and enter URL interactively
-cargo run -p lazy-zip-cli
-```
-
-### Controls
-
-- **Arrow Up/Down** — navigate the file list
-- **Enter** — expand/collapse folders, or download a file
-- **q** — quit
-- **Esc** — return to URL input
 
 ---
 
@@ -99,7 +78,6 @@ This means you can explore a **10 GB** ZIP by downloading only a few **kilobytes
 | Crate | Description |
 |-------|-------------|
 | `core/` | `lazy-zip-core` — HTTP reader, ZIP explorer, downloader |
-| `cli/` | `lazy-zip-cli` — Terminal UI with ratatui |
 | `desktop/` | Tauri + SvelteKit desktop app |
 | `python/` | PyO3 Python bindings |
 
@@ -109,4 +87,4 @@ This project is licensed under the [GNU General Public License v3.0](LICENSE).
 
 ## Keywords & Tags
 
-`rust`, `zip`, `tauri`, `svelte`, `cli`, `tui`, `http-range`, `remote-file`, `partial-download`, `bandwidth-saver`, `desktop-app`
+`rust`, `zip`, `tauri`, `svelte`, `http-range`, `remote-file`, `partial-download`, `bandwidth-saver`, `desktop-app`
