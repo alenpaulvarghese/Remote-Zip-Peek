@@ -3,7 +3,7 @@ use lazy_zip_core::zip_explorer::{FileNode, ZipExplorer};
 use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 
-#[pyclass]
+#[pyclass(skip_from_py_object)]
 #[derive(Clone)]
 pub struct FileEntry {
     #[pyo3(get)]
@@ -77,9 +77,9 @@ impl RemoteZip {
 
     fn __exit__(
         &mut self,
-        _exc_type: PyObject,
-        _exc_value: PyObject,
-        _traceback: PyObject,
+        _exc_type: Option<Bound<'_, PyAny>>,
+        _exc_value: Option<Bound<'_, PyAny>>,
+        _traceback: Option<Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         self.close();
         Ok(())
