@@ -31,6 +31,7 @@ pub struct DisplayItem {
     pub size: u64,
 }
 
+#[allow(dead_code)]
 pub enum AppAction {
     Tick,
     Input(Event),

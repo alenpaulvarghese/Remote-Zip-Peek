@@ -5,9 +5,9 @@ use anyhow::Result;
 use app::{App, AppAction, AppState};
 use clap::Parser;
 use crossterm::event::{self, Event, KeyCode};
+use lazy_zip_core::{http_reader::RemoteHttpReader, zip_explorer::ZipExplorer};
 use log::{error, info, warn};
 use ratatui::widgets::ListState;
-use lazy_zip_core::{http_reader::RemoteHttpReader, zip_explorer::ZipExplorer};
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
@@ -33,7 +33,7 @@ fn validate_url(url: &str) -> Result<(), lazy_zip_core::error::Error> {
 #[tokio::main]
 async fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    
+
     let args = Args::parse();
     info!("Starting remote-zip-explorer");
 
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
     };
 
     let (tx, mut rx) = mpsc::channel(100);
-    
+
     let args_url = args.url.clone();
     if let Some(url) = args_url {
         app.url_input = url.clone();
@@ -116,163 +116,161 @@ async fn main() -> Result<()> {
                     }
                 }
                 AppAction::Input(event) => {
-                    match event {
-                        Event::Key(key) => {
-                            if matches!(app.state, AppState::InputUrl) {
-                                match key.code {
-                                    KeyCode::Enter => {
-                                        if !app.url_input.is_empty() {
-                                            if let Err(e) = validate_url(&app.url_input) {
-                                                app.state = AppState::Error(e.to_string());
-                                                continue;
+                    if let Event::Key(key) = event {
+                        if matches!(app.state, AppState::InputUrl) {
+                            match key.code {
+                                KeyCode::Enter => {
+                                    if !app.url_input.is_empty() {
+                                        if let Err(e) = validate_url(&app.url_input) {
+                                            app.state = AppState::Error(e.to_string());
+                                            continue;
+                                        }
+                                        app.state = AppState::Loading;
+                                        let tx_load = tx.clone();
+                                        let url = app.url_input.clone();
+                                        tokio::spawn(async move {
+                                            load_zip(url, tx_load).await;
+                                        });
+                                    }
+                                }
+                                KeyCode::Char(c) => {
+                                    app.url_input.push(c);
+                                }
+                                KeyCode::Backspace => {
+                                    app.url_input.pop();
+                                }
+                                KeyCode::Esc => {
+                                    break; // Quit
+                                }
+                                _ => {}
+                            }
+                        } else if matches!(app.state, AppState::Filtering) {
+                            match key.code {
+                                KeyCode::Char(c) => {
+                                    app.filter_input.push(c);
+                                    update_display_list(&mut app);
+                                    app.list_state.select(Some(0));
+                                }
+                                KeyCode::Backspace => {
+                                    app.filter_input.pop();
+                                    update_display_list(&mut app);
+                                    app.list_state.select(Some(0));
+                                }
+                                KeyCode::Enter | KeyCode::Esc => {
+                                    app.state = AppState::Exploring;
+                                }
+                                _ => {}
+                            }
+                        } else if matches!(app.state, AppState::Exploring) {
+                            match key.code {
+                                KeyCode::Char('/') => {
+                                    app.state = AppState::Filtering;
+                                    app.filter_input.clear();
+                                    update_display_list(&mut app);
+                                }
+                                KeyCode::Char('q') => break,
+                                KeyCode::Char('d') => {
+                                    // Trigger download for selected file
+                                    if let Some(i) = app.list_state.selected() {
+                                        if let Some(item) = app.display_items.get(i) {
+                                            if !item.is_dir && item.name != ".." {
+                                                let name = item.name.clone();
+                                                let size = item.size;
+                                                start_download(&mut app, &tx, name, size);
+                                            } else {
+                                                app.message = Some((
+                                                    "Select a file to download".to_string(),
+                                                    std::time::Instant::now(),
+                                                ));
                                             }
-                                            app.state = AppState::Loading;
-                                            let tx_load = tx.clone();
-                                            let url = app.url_input.clone();
-                                            tokio::spawn(async move {
-                                                load_zip(url, tx_load).await;
-                                            });
                                         }
                                     }
-                                    KeyCode::Char(c) => {
-                                        app.url_input.push(c);
-                                    }
-                                    KeyCode::Backspace => {
-                                        app.url_input.pop();
-                                    }
-                                    KeyCode::Esc => {
-                                        break; // Quit
-                                    }
-                                    _ => {}
                                 }
-                            } else if matches!(app.state, AppState::Filtering) {
-                                match key.code {
-                                    KeyCode::Char(c) => {
-                                        app.filter_input.push(c);
-                                        update_display_list(&mut app);
-                                        app.list_state.select(Some(0));
-                                    }
-                                    KeyCode::Backspace => {
-                                        app.filter_input.pop();
-                                        update_display_list(&mut app);
-                                        app.list_state.select(Some(0));
-                                    }
-                                    KeyCode::Enter | KeyCode::Esc => {
-                                        app.state = AppState::Exploring;
-                                    }
-                                    _ => {}
+                                KeyCode::Down => {
+                                    let i = match app.list_state.selected() {
+                                        Some(i) => {
+                                            if app.display_items.is_empty()
+                                                || i >= app.display_items.len() - 1
+                                            {
+                                                0
+                                            } else {
+                                                i + 1
+                                            }
+                                        }
+                                        None => 0,
+                                    };
+                                    app.list_state.select(Some(i));
                                 }
-                            } else if matches!(app.state, AppState::Exploring) {
-                                match key.code {
-                                    KeyCode::Char('/') => {
-                                        app.state = AppState::Filtering;
+                                KeyCode::Up => {
+                                    let i = match app.list_state.selected() {
+                                        Some(i) => {
+                                            if app.display_items.is_empty() {
+                                                0
+                                            } else if i == 0 {
+                                                app.display_items.len() - 1
+                                            } else {
+                                                i - 1
+                                            }
+                                        }
+                                        None => 0,
+                                    };
+                                    app.list_state.select(Some(i));
+                                }
+                                KeyCode::Enter => {
+                                    if let Some(i) = app.list_state.selected() {
+                                        if let Some(item) = app.display_items.get(i) {
+                                            if item.name == ".." {
+                                                app.current_path.pop();
+                                                app.filter_input.clear(); // Clear filter on nav
+                                                update_display_list(&mut app);
+                                                app.list_state.select(Some(0));
+                                            } else if item.is_dir {
+                                                app.current_path.push(item.name.clone());
+                                                app.filter_input.clear(); // Clear filter on nav
+                                                update_display_list(&mut app);
+                                                app.list_state.select(Some(0));
+                                            } else {
+                                                let name = item.name.clone();
+                                                let size = item.size;
+                                                start_download(&mut app, &tx, name, size);
+                                            }
+                                        }
+                                    }
+                                }
+                                KeyCode::Esc => {
+                                    if !app.filter_input.is_empty() {
                                         app.filter_input.clear();
                                         update_display_list(&mut app);
                                     }
-                                    KeyCode::Char('q') => break,
-                                    KeyCode::Char('d') => {
-                                        // Trigger download for selected file
-                                         if let Some(i) = app.list_state.selected() {
-                                            if let Some(item) = app.display_items.get(i) {
-                                                if !item.is_dir && item.name != ".." {
-                                                    let name = item.name.clone();
-                                                    let size = item.size;
-                                                    start_download(&mut app, &tx, name, size);
-                                                } else {
-                                                    app.message = Some(("Select a file to download".to_string(), std::time::Instant::now()));
-                                                }
-                                            }
-                                         }
-                                    }
-                                    KeyCode::Down => {
-                                        let i = match app.list_state.selected() {
-                                            Some(i) => {
-                                                if app.display_items.is_empty() {
-                                                    0
-                                                } else if i >= app.display_items.len() - 1 {
-                                                    0
-                                                } else {
-                                                    i + 1
-                                                }
-                                            }
-                                            None => 0,
-                                        };
-                                        app.list_state.select(Some(i));
-                                    }
-                                    KeyCode::Up => {
-                                        let i = match app.list_state.selected() {
-                                            Some(i) => {
-                                                if app.display_items.is_empty() {
-                                                    0
-                                                } else if i == 0 {
-                                                    app.display_items.len() - 1
-                                                } else {
-                                                    i - 1
-                                                }
-                                            }
-                                            None => 0,
-                                        };
-                                        app.list_state.select(Some(i));
-                                    }
-                                    KeyCode::Enter => {
-                                        if let Some(i) = app.list_state.selected() {
-                                            if let Some(item) = app.display_items.get(i) {
-                                                if item.name == ".." {
-                                                    app.current_path.pop();
-                                                    app.filter_input.clear(); // Clear filter on nav
-                                                    update_display_list(&mut app);
-                                                    app.list_state.select(Some(0));
-                                                } else if item.is_dir {
-                                                    app.current_path.push(item.name.clone());
-                                                    app.filter_input.clear(); // Clear filter on nav
-                                                    update_display_list(&mut app);
-                                                    app.list_state.select(Some(0));
-                                                } else {
-                                                    let name = item.name.clone();
-                                                    let size = item.size;
-                                                    start_download(&mut app, &tx, name, size);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    KeyCode::Esc => {
-                                        if !app.filter_input.is_empty() {
-                                            app.filter_input.clear();
-                                            update_display_list(&mut app);
-                                        }
-                                    }
-                                    _ => {}
                                 }
-                            } else if matches!(app.state, AppState::Error(_)) {
-                                if key.code == KeyCode::Esc || key.code == KeyCode::Enter {
-                                    app.state = AppState::InputUrl; // Reset
-                                    app.url_input.clear();
-                                }
+                                _ => {}
                             }
+                        } else if matches!(app.state, AppState::Error(_))
+                            && (key.code == KeyCode::Esc || key.code == KeyCode::Enter)
+                        {
+                            app.state = AppState::InputUrl; // Reset
+                            app.url_input.clear();
                         }
-                        _ => {}
                     }
                 }
                 AppAction::InputError(msg) => {
                     app.message = Some((msg, std::time::Instant::now()));
                 }
-                AppAction::Loaded(res) => {
-                    match res {
-                        Ok((explorer, nodes)) => {
-                            app.explorer = Some(explorer);
-                            app.root_nodes = nodes;
-                            app.state = AppState::Exploring;
-                            app.current_path.clear();
-                            update_display_list(&mut app);
-                            if !app.display_items.is_empty() {
-                                app.list_state.select(Some(0));
-                            }
-                        }
-                        Err(e) => {
-                            app.state = AppState::Error(e.to_string());
+                AppAction::Loaded(res) => match res {
+                    Ok((explorer, nodes)) => {
+                        app.explorer = Some(explorer);
+                        app.root_nodes = nodes;
+                        app.state = AppState::Exploring;
+                        app.current_path.clear();
+                        update_display_list(&mut app);
+                        if !app.display_items.is_empty() {
+                            app.list_state.select(Some(0));
                         }
                     }
-                }
+                    Err(e) => {
+                        app.state = AppState::Error(e.to_string());
+                    }
+                },
                 AppAction::DownloadFile(_) => {
                     // Marker for start
                 }
@@ -284,10 +282,16 @@ async fn main() -> Result<()> {
                 AppAction::DownloadComplete(res) => {
                     match res {
                         Ok(_) => {
-                            app.message = Some(("Download completed successfully!".to_string(), std::time::Instant::now()));
+                            app.message = Some((
+                                "Download completed successfully!".to_string(),
+                                std::time::Instant::now(),
+                            ));
                         }
                         Err(e) => {
-                            app.message = Some((format!("Download failed: {}", e), std::time::Instant::now()));
+                            app.message = Some((
+                                format!("Download failed: {}", e),
+                                std::time::Instant::now(),
+                            ));
                         }
                     }
                     app.state = AppState::Exploring; // Return to explorer
@@ -305,16 +309,16 @@ async fn main() -> Result<()> {
 fn start_download(app: &mut App, tx: &mpsc::Sender<AppAction>, name: String, size: u64) {
     app.state = AppState::Downloading(name.clone(), 0, size);
     let tx_dl = tx.clone();
-    
+
     let url = app.url_input.clone();
-    
+
     // Construct full path for download
     let mut path_parts = app.current_path.clone();
     path_parts.push(name.clone());
     let path = path_parts.join("/");
-    
+
     let filename = name; // Save as just the filename in current local dir
-    
+
     tokio::spawn(async move {
         download_file(url, path, filename, tx_dl).await;
     });
@@ -323,7 +327,7 @@ fn start_download(app: &mut App, tx: &mpsc::Sender<AppAction>, name: String, siz
 async fn load_zip(url: String, tx: mpsc::Sender<AppAction>) {
     info!("Loading ZIP from: {}", url);
     let res = async {
-        let mut reader = RemoteHttpReader::new(&url).await?;
+        let reader = RemoteHttpReader::new(&url).await?;
         let mut explorer = ZipExplorer::new(reader);
         let scan = explorer.list_files().await?;
         Ok((explorer, scan.files))
@@ -343,23 +347,26 @@ async fn download_file(url: String, path: String, filename: String, tx: mpsc::Se
     let res = async {
         let reader = RemoteHttpReader::new(&url).await?;
         let explorer = ZipExplorer::new(reader);
-        
+
         let stream = explorer.get_file_stream(&path).await?;
         tokio::pin!(stream);
 
         use tokio_stream::StreamExt;
-        
+
         let mut file = tokio::fs::File::create(&filename).await?;
-        
+
         while let Some(chunk_res) = stream.next().await {
             let chunk = chunk_res?;
             file.write_all(&chunk).await?;
-            let _ = tx.send(AppAction::DownloadProgress(chunk.len() as u64)).await;
+            let _ = tx
+                .send(AppAction::DownloadProgress(chunk.len() as u64))
+                .await;
         }
-        
+
         Ok(())
-    }.await;
-    
+    }
+    .await;
+
     match &res {
         Ok(()) => info!("Download complete: {}", filename),
         Err(e) => warn!("Download failed: {}", e),

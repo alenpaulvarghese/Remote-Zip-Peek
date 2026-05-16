@@ -1,15 +1,13 @@
 use crate::app::{App, AppState, DisplayItem};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture},
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use lazy_zip_core::zip_explorer::FileNode;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame, Terminal,
 };
@@ -58,12 +56,8 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                 format!("/{}", app.current_path.join("/"))
             };
 
-            let title = if matches!(app.state, AppState::Filtering) {
-                format!(
-                    "Files - {} (Filter: {})",
-                    current_path_str, app.filter_input
-                )
-            } else if !app.filter_input.is_empty() {
+            let title = if matches!(app.state, AppState::Filtering) || !app.filter_input.is_empty()
+            {
                 format!(
                     "Files - {} (Filter: {})",
                     current_path_str, app.filter_input

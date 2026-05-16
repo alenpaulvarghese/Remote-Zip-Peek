@@ -171,7 +171,7 @@ impl ZipExplorer {
 
             let mut buffer = [0u8; 262144]; // 256KB buffer
             loop {
-                let n = compat_reader.read(&mut buffer).await.map_err(|e| Error::Io(e))?;
+                let n = compat_reader.read(&mut buffer).await.map_err(Error::Io)?;
                 if n == 0 {
                     break;
                 }

@@ -1,6 +1,6 @@
-use pyo3::prelude::*;
 use lazy_zip_core::http_reader::RemoteHttpReader;
 use lazy_zip_core::zip_explorer::{FileNode, ZipExplorer};
+use pyo3::prelude::*;
 use tokio_stream::StreamExt;
 
 #[pyclass]
@@ -65,7 +65,9 @@ impl RemoteZip {
         Ok(Self {
             url,
             files: Vec::new(),
-            runtime_guard: RuntimeGuard { runtime: Some(runtime) },
+            runtime_guard: RuntimeGuard {
+                runtime: Some(runtime),
+            },
         })
     }
 
@@ -73,7 +75,12 @@ impl RemoteZip {
         Ok(slf)
     }
 
-    fn __exit__(&mut self, _exc_type: PyObject, _exc_value: PyObject, _traceback: PyObject) -> PyResult<()> {
+    fn __exit__(
+        &mut self,
+        _exc_type: PyObject,
+        _exc_value: PyObject,
+        _traceback: PyObject,
+    ) -> PyResult<()> {
         self.close();
         Ok(())
     }
@@ -87,51 +94,62 @@ impl RemoteZip {
     }
 
     fn load(&mut self) -> PyResult<()> {
-        let runtime = self.runtime_guard.runtime.as_ref()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Runtime already closed"))?;
+        let runtime =
+            self.runtime_guard.runtime.as_ref().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Runtime already closed")
+            })?;
 
         let url = self.url.clone();
-        
+
         let files = runtime.block_on(async move {
-            let reader = RemoteHttpReader::new(&url).await
+            let reader = RemoteHttpReader::new(&url)
+                .await
                 .map_err(|e| pyo3::exceptions::PyConnectionError::new_err(e.to_string()))?;
-            
+
             let mut explorer = ZipExplorer::new(reader);
-            let scan = explorer.list_files().await
+            let scan = explorer
+                .list_files()
+                .await
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
-            
+
             Ok::<_, pyo3::PyErr>(scan.files)
         })?;
 
         self.files = files.iter().map(FileEntry::from).collect();
-        
+
         Ok(())
     }
 
     fn read(&mut self, path: &str) -> PyResult<Vec<u8>> {
-        let runtime = self.runtime_guard.runtime.as_ref()
-            .ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("Runtime already closed"))?;
+        let runtime =
+            self.runtime_guard.runtime.as_ref().ok_or_else(|| {
+                pyo3::exceptions::PyRuntimeError::new_err("Runtime already closed")
+            })?;
 
         let url = self.url.clone();
-        
+
         runtime.block_on(async {
-            let reader = RemoteHttpReader::new(&url).await
+            let reader = RemoteHttpReader::new(&url)
+                .await
                 .map_err(|e| pyo3::exceptions::PyConnectionError::new_err(e.to_string()))?;
-            
+
             let explorer = ZipExplorer::new(reader);
-            
-            let stream = explorer.get_file_stream(path).await
+
+            let stream = explorer
+                .get_file_stream(path)
+                .await
                 .map_err(|e| pyo3::exceptions::PyFileNotFoundError::new_err(e.to_string()))?;
-            
+
             tokio::pin!(stream);
-            
+
             let mut data = Vec::new();
-            
+
             while let Some(chunk) = stream.next().await {
-                let chunk = chunk.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
+                let chunk =
+                    chunk.map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
                 data.extend_from_slice(&chunk);
             }
-            
+
             Ok(data)
         })
     }
