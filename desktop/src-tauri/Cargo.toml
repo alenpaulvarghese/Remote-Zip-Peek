@@ -1,6 +1,6 @@
 [package]
 name = "desktop"
-version = "0.1.1"
+version = "0.1.2"
 description = "Desktop app for exploring remote ZIP archives without downloading them"
 authors = ["Alen Paul Varghese"]
 edition = "2021"
