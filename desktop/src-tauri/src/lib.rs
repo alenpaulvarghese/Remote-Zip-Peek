@@ -1,5 +1,4 @@
-#[allow(unused_imports)]
-use lazy_zip_core::downloader::{self, DownloadProgress};
+use lazy_zip_core::downloader;
 use lazy_zip_core::http_reader::RemoteHttpReader;
 use lazy_zip_core::zip_explorer::{ScanResult, ZipExplorer};
 use std::path::PathBuf;
@@ -15,23 +14,24 @@ async fn scan_zip(url: String) -> Result<ScanResult, String> {
 }
 
 #[tauri::command]
-async fn download_file(url: String, file_path: String, save_path: String) -> Result<(), String> {
+async fn download_file(url: String, file_path: String, save_path: String) -> Result<u64, String> {
     let (tx, rx) = std::sync::mpsc::channel();
 
     std::thread::Builder::new()
         .name("zip-dl".into())
         .stack_size(8 * 1024 * 1024)
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .expect("runtime");
-            let result = rt.block_on(async {
-                downloader::download_file_to_path(&url, &file_path, &PathBuf::from(&save_path))
-                    .await
-                    .map_err(|e| e.to_string())?;
-                Ok::<(), String>(())
-            });
+            let result = (|| -> Result<u64, String> {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
+                rt.block_on(async {
+                    downloader::download_file_to_path(&url, &file_path, &PathBuf::from(&save_path))
+                        .await
+                        .map_err(|e| e.to_string())
+                })
+            })();
             let _ = tx.send(result);
         })
         .map_err(|e| format!("Thread spawn failed: {e}"))?;
@@ -71,19 +71,21 @@ async fn download_folder(
         .name("zip-dl-batch".into())
         .stack_size(8 * 1024 * 1024)
         .spawn(move || {
-            let rt = tokio::runtime::Builder::new_multi_thread()
-                .worker_threads(concurrency)
-                .enable_all()
-                .thread_stack_size(8 * 1024 * 1024)
-                .build()
-                .expect("runtime");
-            let result = rt.block_on(async {
-                downloader::download_batch(&url, files, concurrency, |progress| {
-                    let _ = app.emit("download-progress", &progress);
+            let result = (|| -> Result<u32, String> {
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(concurrency)
+                    .enable_all()
+                    .thread_stack_size(8 * 1024 * 1024)
+                    .build()
+                    .map_err(|e| format!("Failed to create tokio runtime: {e}"))?;
+                rt.block_on(async {
+                    downloader::download_batch(&url, files, concurrency, |progress| {
+                        let _ = app.emit("download-progress", &progress);
+                    })
+                    .await
+                    .map_err(|e| e.to_string())
                 })
-                .await
-                .map_err(|e| e.to_string())
-            });
+            })();
             let _ = tx.send(result);
         })
         .map_err(|e| format!("Thread spawn failed: {e}"))?;
