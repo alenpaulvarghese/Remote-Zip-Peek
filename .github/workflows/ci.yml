@@ -113,9 +113,6 @@ jobs:
   audit-rust:
     name: Audit Rust Dependencies
     runs-on: ubuntu-latest
-    # Reports only until its first results have been reviewed: Tauri's Linux dependencies carry
-    # known unmaintained-crate advisories that may need listing in deny.toml.
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
