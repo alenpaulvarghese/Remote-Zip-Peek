@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 lazy-zip-core = { path = "../core" }
-pyo3 = "0.29"
+pyo3 = "0.30"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs"] }
 tokio-stream = "0.1"
 bytes = "1.0"
