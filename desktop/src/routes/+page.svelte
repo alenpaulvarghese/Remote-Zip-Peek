@@ -1,39 +1,75 @@
 <script lang="ts">
-  import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
-  import { save, open, ask } from "@tauri-apps/plugin-dialog";
+  import { ask, open, save } from "@tauri-apps/plugin-dialog";
+  import { findExistingFiles, scanZip } from "$lib/api";
+  import DownloadsPanel from "$lib/components/DownloadsPanel.svelte";
+  import HelpBar from "$lib/components/HelpBar.svelte";
+  import Spinner from "$lib/components/Spinner.svelte";
+  import TreeView from "$lib/components/TreeView.svelte";
+  import { DownloadManager } from "$lib/downloads.svelte";
+  import { calcEfficiency, formatBytes, formatCount, MAX_WORKERS, MIN_WORKERS, normalizeWorkers, plural } from "$lib/format";
+  import {
+    partiallySelected,
+    resolveSelection,
+    selectRange,
+    toggleSelected,
+    type Selection,
+  } from "$lib/selection";
+  import {
+    allFolderIds,
+    ancestorsOf,
+    buildIndex,
+    createMatcher,
+    searchRows,
+    TreeSorter,
+    visibleRows,
+    type SortKey,
+    type TreeIndex,
+  } from "$lib/tree";
+  import type { ShortcutContext } from "$lib/shortcuts";
+  import type { ScanResult } from "$lib/types";
 
-  interface FileNode {
-    name: string;
-    path: string;
-    size: number;
-    compressed_size: number;
-    is_dir: boolean;
-    children: FileNode[];
-  }
-
-  interface ScanResult {
-    files: FileNode[];
-    total_size: number;
-    fetched_size: number;
-  }
-
-  interface DownloadProgress {
-    current_file: string;
-    completed: number;
-    total: number;
-  }
+  const SEARCH_DEBOUNCE_MS = 100;
 
   let url = $state("");
-  let scanResult: ScanResult | null = $state(null);
+  let scannedUrl = "";
+  let scanResult = $state.raw<ScanResult | null>(null);
+  let index = $state.raw<TreeIndex | null>(null);
   let isLoading = $state(false);
   let errorMsg = $state("");
-  let downloadingPaths = $state<Set<string>>(new Set());
-  let expandedDirs = $state<Set<string>>(new Set());
 
-  // Folder download progress
-  let folderProgress: DownloadProgress | null = $state(null);
-  let folderDownloadPath = $state("");
+  // Tree state
+  let expanded = $state.raw<ReadonlySet<number>>(new Set());
+  let selection = $state.raw<Selection>(new Set());
+  let focusId = $state<number | null>(null);
+  let rangeAnchor: number | null = null;
+
+  // Search and sort
+  let searchInput = $state("");
+  let searchQuery = $state("");
+  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let sortKey = $state<SortKey>("name");
+  let sortDescending = $state(false);
+  let searchField = $state<HTMLInputElement>();
+
+  let matcher = $derived(createMatcher(searchQuery));
+  let order = $derived({ key: sortKey, descending: sortDescending });
+  let sorter = $derived(index ? new TreeSorter(index, order) : null);
+  let rows = $derived.by(() => {
+    if (!index || !sorter) return [];
+    return matcher ? searchRows(index, matcher, order) : visibleRows(sorter, expanded);
+  });
+  let partial = $derived(index ? partiallySelected(index, selection) : new Set<number>());
+  let resolved = $derived(index && selection.size > 0 ? resolveSelection(index, selection) : null);
+  let breadcrumb = $derived(
+    index && focusId !== null ? [...ancestorsOf(index, focusId), focusId] : [],
+  );
+
+  // Help bar
+  let shortcutContext = $state<ShortcutContext>("url");
+  let showShortcuts = $state(false);
+
+  // Downloads
+  const downloads = new DownloadManager();
 
   // Settings
   let downloadWorkers = $state(10);
@@ -49,179 +85,191 @@
     toastTimer = setTimeout(() => { toastMsg = ""; toastTimer = null; }, 4000);
   }
 
-  async function scanZip(event: Event) {
+  async function scan(event: Event) {
     event.preventDefault();
     if (!url) return;
 
     isLoading = true;
     errorMsg = "";
     scanResult = null;
-    expandedDirs = new Set();
+    index = null;
+    expanded = new Set();
+    selection = new Set();
+    focusId = null;
+    rangeAnchor = null;
+    clearSearch();
 
+    const scanningUrl = url;
     try {
-      scanResult = await invoke("scan_zip", { url });
+      const result = await scanZip(scanningUrl);
+      const newIndex = buildIndex(result.nodes);
+      scannedUrl = scanningUrl;
+      index = newIndex;
+      scanResult = result;
+      // A single top-level folder would otherwise be one lonely row.
+      if (newIndex.roots.length === 1 && result.nodes[newIndex.roots[0]].is_dir) {
+        expanded = new Set(newIndex.roots);
+      }
     } catch (err: unknown) {
-      errorMsg = err instanceof Error ? err.message : String(err);
+      errorMsg = String(err);
     } finally {
       isLoading = false;
     }
   }
 
-  function toggleDir(path: string) {
-    const next = new Set(expandedDirs);
-    if (next.has(path)) {
-      next.delete(path);
+  function setSearch(value: string) {
+    searchInput = value;
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => {
+      searchQuery = value;
+      searchTimer = null;
+    }, SEARCH_DEBOUNCE_MS);
+  }
+
+  function clearSearch() {
+    if (searchTimer) clearTimeout(searchTimer);
+    searchTimer = null;
+    searchInput = "";
+    searchQuery = "";
+  }
+
+  function toggleExpanded(id: number) {
+    const next = new Set(expanded);
+    if (!next.delete(id)) next.add(id);
+    expanded = next;
+  }
+
+  /** Shows a node in the full tree, leaving search if needed. */
+  function reveal(id: number) {
+    if (!index) return;
+    clearSearch();
+    expanded = new Set([...expanded, ...ancestorsOf(index, id)]);
+    focusId = id;
+  }
+
+  function activate(id: number) {
+    if (!index) return;
+    if (matcher) {
+      reveal(id);
+    } else if (index.nodes[id].is_dir) {
+      toggleExpanded(id);
     } else {
-      next.add(path);
+      void downloadNode(id);
     }
-    expandedDirs = next;
   }
 
-  function formatBytes(bytes: number, decimals = 1) {
-    if (!+bytes) return "0 B";
-    const k = 1024;
-    const dm = decimals < 0 ? 0 : decimals;
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+  function handleToggleSelected(id: number) {
+    if (!index) return;
+    selection = toggleSelected(index, selection, id);
+    rangeAnchor = id;
   }
 
-  function calcEfficiency(total: number, fetched: number) {
-    if (total === 0) return "0";
-    return (((total - fetched) / total) * 100).toFixed(1);
+  function handleSelectRange(id: number) {
+    selection = selectRange(selection, rows, rangeAnchor ?? id, id);
+    rangeAnchor ??= id;
   }
 
-  function collectFiles(node: FileNode): string[] {
-    if (!node.is_dir) return [node.path];
-    const result: string[] = [];
-    for (const child of node.children) {
-      result.push(...collectFiles(child));
+  async function downloadNode(id: number) {
+    if (!index) return;
+    const node = index.nodes[id];
+    if (node.is_dir) {
+      await downloadSelection(new Set([id]));
+      return;
     }
-    return result;
-  }
 
-  function countFiles(node: FileNode): number {
-    if (!node.is_dir) return 1;
-    let count = 0;
-    for (const child of node.children) {
-      count += countFiles(child);
-    }
-    return count;
-  }
-
-  function calcFolderSize(node: FileNode): number {
-    if (!node.is_dir) return node.size;
-    let total = 0;
-    for (const child of node.children) {
-      total += calcFolderSize(child);
-    }
-    return total;
-  }
-
-  async function downloadSingleFile(node: FileNode) {
-    const savePath = await save({
-      defaultPath: node.name,
-      title: "Save file as...",
+    const dest = await save({ defaultPath: node.name, title: "Save file as..." });
+    if (!dest) return;
+    await downloads.start({
+      label: node.name,
+      url: scannedUrl,
+      target: { kind: "file", zipPath: node.path, dest },
+      sizes: new Map([[node.path, node.size]]),
+      workers: normalizeWorkers(downloadWorkers),
     });
-    if (!savePath) return;
-
-    const next = new Set(downloadingPaths);
-    next.add(node.path);
-    downloadingPaths = next;
-
-    try {
-      await invoke("download_file", {
-        url,
-        filePath: node.path,
-        savePath,
-      });
-      showToast(`Downloaded "${node.name}" · ${formatBytes(node.size)}`);
-    } catch (err: unknown) {
-      errorMsg = `Download failed: ${err instanceof Error ? err.message : String(err)}`;
-    } finally {
-      const done = new Set(downloadingPaths);
-      done.delete(node.path);
-      downloadingPaths = done;
-    }
   }
 
-  async function downloadFolder(node: FileNode) {
-    const saveDir = await open({
-      directory: true,
-      title: "Select destination folder",
-    });
-    if (!saveDir) return;
+  async function downloadSelection(items: Selection) {
+    if (!index) return;
+    const { base, files, sizes, roots } = resolveSelection(index, items);
+    if (files.length === 0) {
+      showToast("Nothing to download: the selection has no files");
+      return;
+    }
 
-    // Create a subfolder with the folder's name
-    const destDir = saveDir + "/" + node.name;
+    const destDir = await open({ directory: true, title: "Select destination folder" });
+    if (!destDir) return;
 
-    let filePaths = collectFiles(node);
-    if (filePaths.length === 0) return;
-
-    // Build local destination paths and check which already exist
-    const localPaths = filePaths.map((fp) => {
-      const relative = fp.startsWith(node.path)
-        ? fp.slice(node.path.length).replace(/^\//, "")
-        : fp;
-      return destDir + "/" + relative;
-    });
-
-    const existing = await invoke<string[]>("check_existing_files", { paths: localPaths });
-
+    let filesToDownload = files;
+    const existing = await findExistingFiles(destDir, base, files);
     if (existing.length > 0) {
       const redownload = await ask(
-        `${existing.length} of ${filePaths.length} files already exist in "${node.name}". Do you want to re-download them?`,
-        { title: "Files Already Exist", kind: "warning", okLabel: "Re-download All", cancelLabel: "Skip Existing" }
+        `${formatCount(existing.length)} of ${plural(files.length, "file")} already exist in the destination. Do you want to download them again?`,
+        { title: "Files Already Exist", kind: "warning", okLabel: "Download All Again", cancelLabel: "Skip Existing" },
       );
-
       if (!redownload) {
-        // Build a set of zip paths that already exist locally
         const existingSet = new Set(existing);
-        filePaths = filePaths.filter((_, i) => !existingSet.has(localPaths[i]));
-        if (filePaths.length === 0) return; // everything already downloaded
+        filesToDownload = files.filter((path) => !existingSet.has(path));
+        for (const path of existing) sizes.delete(path);
+        if (filesToDownload.length === 0) {
+          showToast("All selected files already exist");
+          return;
+        }
       }
     }
 
-    const next = new Set(downloadingPaths);
-    next.add(node.path);
-    downloadingPaths = next;
-    folderDownloadPath = node.path;
-    folderProgress = { current_file: "", completed: 0, total: filePaths.length };
+    const label =
+      roots.length === 1
+        ? `${index.nodes[roots[0]].name}${index.nodes[roots[0]].is_dir ? "/" : ""}`
+        : plural(roots.length, "item");
+    await downloads.start({
+      label,
+      url: scannedUrl,
+      target: { kind: "selection", destDir, base, files: filesToDownload },
+      sizes,
+      workers: normalizeWorkers(downloadWorkers),
+    });
+  }
 
-    try {
-      const unlisten = await listen<DownloadProgress>("download-progress", (event) => {
-        folderProgress = event.payload;
-      });
-
-      try {
-        await invoke("download_folder", {
-          url,
-          folderPath: node.path,
-          saveDir: destDir,
-          filePaths,
-          workers: downloadWorkers,
-        });
-        showToast(`Downloaded ${filePaths.length} file${filePaths.length !== 1 ? "s" : ""} · ${formatBytes(calcFolderSize(node))}`);
-      } finally {
-        unlisten();
-      }
-    } catch (err: unknown) {
-      errorMsg = `Download failed: ${err instanceof Error ? err.message : String(err)}`;
-    } finally {
-      const done = new Set(downloadingPaths);
-      done.delete(node.path);
-      downloadingPaths = done;
-      folderProgress = null;
-      folderDownloadPath = "";
+  function handleGlobalKeydown(event: KeyboardEvent) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f" && scanResult) {
+      event.preventDefault();
+      searchField?.focus();
+      searchField?.select();
+    } else if (event.key === "?" && !isTextField(event.target)) {
+      event.preventDefault();
+      showShortcuts = !showShortcuts;
     }
+  }
+
+  // Runs before other handlers, so Escape closes the list without also clearing the selection.
+  function handleEscapeCapture(event: KeyboardEvent) {
+    if (event.key === "Escape" && showShortcuts) {
+      event.preventDefault();
+      event.stopPropagation();
+      showShortcuts = false;
+    }
+  }
+
+  function isTextField(target: EventTarget | null): boolean {
+    return target instanceof HTMLInputElement && target.type !== "checkbox";
+  }
+
+  // Other controls keep the last context, so the hints don't flicker while using a button.
+  function handleFocusIn(event: FocusEvent) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.matches('input[type="url"]')) shortcutContext = "url";
+    else if (target.matches('input[type="search"]')) shortcutContext = "search";
+    else if (target.matches('[role="tree"]')) shortcutContext = "tree";
   }
 </script>
 
-<div class="h-screen flex flex-col bg-bg-base font-sans select-none">
+<svelte:window onkeydown={handleGlobalKeydown} onkeydowncapture={handleEscapeCapture} onfocusin={handleFocusIn} />
+
+<div class="h-screen flex flex-col bg-bg-base font-sans">
   <!-- Minimal top bar -->
   <header
-    class="flex items-center h-11 px-4 bg-bg-surface border-b border-border-default shrink-0"
-    style="-webkit-app-region: drag;"
+    class="flex items-center h-11 px-4 bg-bg-surface border-b border-border-default shrink-0 select-none"
   >
     <div class="flex items-center gap-2">
       <svg class="w-4 h-4 text-accent" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -229,11 +277,11 @@
         <polyline points="7 10 12 15 17 10" />
         <line x1="12" y1="15" x2="12" y2="3" />
       </svg>
-      <span class="text-sm font-semibold text-text-primary tracking-tight">Remote ZIP Explorer</span>
+      <span class="text-sm font-semibold text-text-primary tracking-tight">Lazy ZIP</span>
     </div>
 
     <!-- Settings toggle -->
-    <div class="ml-auto flex items-center gap-2 relative" style="-webkit-app-region: no-drag;">
+    <div class="ml-auto flex items-center gap-2 relative">
       <button
         class="p-1.5 rounded-md hover:bg-bg-hover/60 transition-colors text-text-tertiary hover:text-text-secondary"
         aria-label="Settings"
@@ -251,8 +299,8 @@
             <span>Download Workers</span>
             <input
               type="number"
-              min="1"
-              max="20"
+              min={MIN_WORKERS}
+              max={MAX_WORKERS}
               bind:value={downloadWorkers}
               class="w-14 bg-bg-input text-text-primary text-xs px-2 py-1 rounded border border-border-default text-center outline-none focus:border-accent"
             />
@@ -266,7 +314,7 @@
   <main class="flex-1 flex flex-col overflow-hidden">
     <!-- URL input area -->
     <div class="px-4 py-3 bg-bg-surface border-b border-border-default shrink-0">
-      <form class="flex gap-2 items-center" onsubmit={scanZip}>
+      <form class="flex gap-2 items-center" onsubmit={scan}>
         <div class="flex-1 relative">
           <input
             type="url"
@@ -282,10 +330,7 @@
           class="bg-accent hover:bg-accent-hover text-bg-base text-sm font-semibold px-5 py-2 rounded-lg transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 shrink-0"
         >
           {#if isLoading}
-            <svg class="animate-spin h-3.5 w-3.5" viewBox="0 0 24 24" fill="none">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
+            <Spinner />
             Scanning…
           {:else}
             Scan
@@ -318,108 +363,108 @@
         </div>
       </div>
 
-      <!-- Download progress bar -->
-      {#if folderProgress}
-        <div class="px-4 py-2 bg-bg-surface border-b border-border-default shrink-0">
-          <div class="flex items-center gap-3 text-xs">
-            <svg class="animate-spin h-3.5 w-3.5 text-accent shrink-0" viewBox="0 0 24 24" fill="none">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            <div class="flex-1 min-w-0">
-              <div class="flex justify-between text-text-secondary mb-1">
-                <span class="truncate">{folderProgress.current_file.split('/').pop() || 'Starting...'}</span>
-                <span class="shrink-0 ml-2 text-text-accent font-medium">{folderProgress.completed}/{folderProgress.total}</span>
-              </div>
-              <div class="w-full h-1 bg-bg-elevated rounded-full overflow-hidden">
-                <div
-                  class="h-full bg-accent rounded-full transition-all duration-300 ease-out"
-                  style="width: {(folderProgress.completed / folderProgress.total) * 100}%"
-                ></div>
-              </div>
-            </div>
-          </div>
+      {#if scanResult.rejected_count > 0}
+        <details class="px-4 py-2 bg-error-bg border-b border-border-default shrink-0 text-xs">
+          <summary class="cursor-pointer text-error">
+            {plural(scanResult.rejected_count, "entry", "entries")} can't be downloaded because the name is unsafe
+          </summary>
+          <ul class="mt-1.5 max-h-32 overflow-auto space-y-1 list-none p-0 m-0 select-text">
+            {#each scanResult.rejected as entry, i (i)}
+              <li class="text-text-secondary break-all"><span class="text-text-primary">{entry.name}</span>: {entry.reason}</li>
+            {/each}
+            {#if scanResult.rejected_count > scanResult.rejected.length}
+              <li class="text-text-tertiary">and {formatCount(scanResult.rejected_count - scanResult.rejected.length)} more</li>
+            {/if}
+          </ul>
+        </details>
+      {/if}
+
+      <!-- Search and sort -->
+      <div class="flex flex-wrap gap-2 items-center px-4 py-2 border-b border-border-default shrink-0">
+        <div class="relative flex-1 min-w-48">
+          <input
+            bind:this={searchField}
+            type="search"
+            value={searchInput}
+            oninput={(event) => setSearch(event.currentTarget.value)}
+            onkeydown={(event) => { if (event.key === "Escape") clearSearch(); }}
+            placeholder="Search files, or use a pattern like *.json"
+            aria-label="Search files"
+            class="w-full bg-bg-input text-text-primary text-xs px-3 py-1.5 rounded-md border border-border-default focus:border-accent outline-none placeholder:text-text-tertiary"
+          />
+        </div>
+        <label class="flex items-center gap-1.5 text-xs text-text-secondary">
+          Sort
+          <select bind:value={sortKey} class="bg-bg-input text-text-primary text-xs px-2 py-1.5 rounded-md border border-border-default outline-none focus:border-accent">
+            <option value="name">Name</option>
+            <option value="size">Size</option>
+            <option value="compressed">Compressed size</option>
+            <option value="ratio">Compression ratio</option>
+          </select>
+        </label>
+        <button
+          type="button"
+          class="text-xs text-text-secondary hover:text-text-primary px-2 py-1.5 rounded-md border border-border-default"
+          aria-label={sortDescending ? "Sorted descending" : "Sorted ascending"}
+          onclick={() => (sortDescending = !sortDescending)}
+        >{sortDescending ? "↓" : "↑"}</button>
+        {#if matcher}
+          <span class="text-xs text-text-secondary" role="status">{plural(rows.length, "match", "matches")}</span>
+          {#if rows.length > 0}
+            <button type="button" class="text-xs text-accent hover:text-accent-hover" onclick={() => (selection = new Set([...selection, ...rows]))}>Select all</button>
+          {/if}
+        {:else}
+          <button type="button" class="text-xs text-text-secondary hover:text-text-primary" onclick={() => { if (index) expanded = new Set(allFolderIds(index)); }}>Expand all</button>
+          <button type="button" class="text-xs text-text-secondary hover:text-text-primary" onclick={() => (expanded = new Set())}>Collapse all</button>
+        {/if}
+      </div>
+
+      {#if resolved}
+        <!-- Selection actions -->
+        <div class="flex items-center gap-3 px-4 py-2 bg-accent-subtle border-b border-border-default shrink-0 text-xs">
+          <span class="text-text-primary font-medium">{plural(resolved.files.length, "file")} selected</span>
+          <span class="text-text-secondary">{formatBytes(resolved.bytes)}</span>
+          <button type="button" class="ml-auto text-text-secondary hover:text-text-primary" onclick={() => (selection = new Set())}>Clear</button>
+          <button type="button" class="bg-accent hover:bg-accent-hover text-bg-base font-semibold px-3 py-1 rounded-md" onclick={() => downloadSelection(selection)}>Download</button>
         </div>
       {/if}
 
-      <!-- File tree -->
-      <div class="flex-1 overflow-auto px-4 py-2">
-        {#snippet renderNode(node: FileNode, depth: number)}
-          {@const isExpanded = expandedDirs.has(node.path)}
-          {@const isDownloading = downloadingPaths.has(node.path)}
-          <div>
-            <div
-              class="group flex items-center gap-1.5 py-1 px-2 rounded-md hover:bg-bg-hover/60 transition-colors cursor-default text-sm"
-              style="padding-left: {depth * 16 + 8}px;"
-            >
-              {#if node.is_dir}
-                <button
-                  class="w-4 h-4 flex items-center justify-center text-text-tertiary hover:text-text-secondary transition-colors shrink-0"
-                  aria-label="Toggle folder"
-                  onclick={() => toggleDir(node.path)}
-                >
-                  <svg class="w-3 h-3 transition-transform {isExpanded ? 'rotate-90' : ''}" viewBox="0 0 24 24" fill="currentColor">
-                    <path d="M9 18l6-6-6-6" />
-                  </svg>
-                </button>
-                <svg class="w-4 h-4 text-accent shrink-0" viewBox="0 0 24 24" fill="currentColor" opacity="0.8">
-                  <path d="M10 4H4a2 2 0 00-2 2v12a2 2 0 002 2h16a2 2 0 002-2V8a2 2 0 00-2-2h-8l-2-2z" />
-                </svg>
-                <button class="text-text-primary truncate text-left bg-transparent border-none p-0 cursor-pointer" onclick={() => toggleDir(node.path)}>{node.name}</button>
-                <span class="text-[11px] text-text-tertiary ml-1 shrink-0">{countFiles(node)} files</span>
-              {:else}
-                <div class="w-4 shrink-0"></div>
-                <svg class="w-4 h-4 text-text-tertiary shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-                  <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                  <polyline points="14 2 14 8 20 8" />
-                </svg>
-                <span class="text-text-secondary truncate">{node.name}</span>
-              {/if}
-
-              <!-- Right-aligned size + download -->
-              <span class="text-[11px] text-text-tertiary ml-auto mr-1 font-mono shrink-0">{formatBytes(node.is_dir ? calcFolderSize(node) : node.size)}</span>
-
-              <!-- Download button (hidden for root-level folders) -->
-              {#if !(node.is_dir && depth === 0)}
-              <button
-                class="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-accent-muted shrink-0 {isDownloading ? '!opacity-100' : ''}"
-                onclick={() => node.is_dir ? downloadFolder(node) : downloadSingleFile(node)}
-                disabled={isDownloading}
-                title={node.is_dir ? "Download folder" : "Download file"}
-                aria-label={node.is_dir ? "Download folder" : "Download file"}
-              >
-                {#if isDownloading}
-                  <svg class="w-3.5 h-3.5 text-accent animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" />
-                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                  </svg>
-                {:else}
-                  <svg class="w-3.5 h-3.5 text-text-tertiary group-hover:text-accent transition-colors" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                {/if}
-              </button>
-              {/if}
-            </div>
-
-            {#if node.is_dir && isExpanded && node.children.length > 0}
-              {#each node.children as child}
-                {@render renderNode(child, depth + 1)}
-              {/each}
-            {/if}
-          </div>
-        {/snippet}
-
-        {#if scanResult.files.length === 0}
-          <p class="text-text-tertiary text-sm italic px-2 py-4">No files found in this archive.</p>
-        {:else}
-          {#each scanResult.files as rootNode}
-            {@render renderNode(rootNode, 0)}
+      {#if breadcrumb.length > 1}
+        <nav class="flex items-center gap-1 px-4 pt-1.5 text-[11px] text-text-tertiary shrink-0 overflow-hidden whitespace-nowrap" aria-label="Location of the focused item">
+          {#each breadcrumb as id, i (id)}
+            {#if i > 0}<span aria-hidden="true">›</span>{/if}
+            <button type="button" class="hover:text-text-secondary truncate" onclick={() => reveal(id)}>{index?.nodes[id].name}</button>
           {/each}
+        </nav>
+      {/if}
+
+      <!-- File tree -->
+      {#if index && sorter && index.nodes.length > 0}
+        {#if matcher && rows.length === 0}
+          <p class="flex-1 text-text-tertiary text-sm italic px-6 py-4">No files match this search.</p>
+        {:else}
+          <TreeView
+            {index}
+            {sorter}
+            {rows}
+            {matcher}
+            {expanded}
+            {selection}
+            {partial}
+            {focusId}
+            onFocus={(id) => (focusId = id)}
+            onToggleExpanded={toggleExpanded}
+            onToggleSelected={handleToggleSelected}
+            onSelectRange={handleSelectRange}
+            onSelectAll={() => (selection = new Set([...selection, ...rows]))}
+            onClearSelection={() => (selection = new Set())}
+            onActivate={activate}
+            onDownload={downloadNode}
+          />
         {/if}
-      </div>
+      {:else}
+        <p class="flex-1 text-text-tertiary text-sm italic px-6 py-4">No downloadable files found in this archive.</p>
+      {/if}
     {:else if !isLoading}
       <!-- Empty state -->
       <div class="flex-1 flex flex-col items-center justify-center gap-3 opacity-40">
@@ -433,9 +478,22 @@
     {/if}
   </main>
 
+  <DownloadsPanel manager={downloads} />
+
+  <HelpBar
+    bind:open={showShortcuts}
+    state={{
+      context: scanResult ? shortcutContext : "url",
+      hasArchive: scanResult !== null,
+      searching: matcher !== null,
+      selectionCount: selection.size,
+      focusedIsDir: index && focusId !== null ? index.nodes[focusId].is_dir : null,
+    }}
+  />
+
   <!-- Success toast -->
   {#if toastMsg}
-    <div class="absolute bottom-4 left-1/2 -translate-x-1/2 bg-bg-elevated border border-success/30 rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-2 z-50 animate-fade-in">
+    <div class="absolute bottom-10 left-1/2 -translate-x-1/2 bg-bg-elevated border border-success/30 rounded-lg shadow-lg px-4 py-2.5 flex items-center gap-2 z-50 animate-fade-in">
       <svg class="w-4 h-4 text-success shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M20 6L9 17l-5-5" />
       </svg>
