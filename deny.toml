@@ -9,9 +9,9 @@ ignore = [
     { id = "RUSTSEC-2025-0081", reason = "unic-char-property: used by urlpattern in tauri-utils" },
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: used by urlpattern in tauri-utils" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: used by urlpattern in tauri-utils" },
-    { id = "RUSTSEC-2026-0370", reason = "zvariant: used by zbus for Tauri's Linux dialogs" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names: used by zbus for Tauri's Linux dialogs" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: used by zbus for Tauri's Linux dialogs" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: used by zbus in Tauri's opener plugin on Linux" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: used by zbus in Tauri's opener plugin on Linux" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: used by zbus in Tauri's opener plugin on Linux" },
 ]
 
 [licenses]
