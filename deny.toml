@@ -1,0 +1,39 @@
+# Checked in CI by cargo-deny.
+[advisories]
+# These are unmaintained, with no fix available, and only reachable through Tauri. None is a known
+# vulnerability. Remove each one once Tauri moves off it.
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error: a build-time macro in Tauri's Linux GTK bindings" },
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range: used by urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common: used by urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property: used by urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version: used by urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident: used by urlpattern in tauri-utils" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: used by zbus for Tauri's Linux dialogs" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: used by zbus for Tauri's Linux dialogs" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: used by zbus for Tauri's Linux dialogs" },
+]
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "bzip2-1.0.6",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

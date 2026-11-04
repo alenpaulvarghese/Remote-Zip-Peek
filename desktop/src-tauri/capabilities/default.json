@@ -6,8 +6,7 @@
     "main"
   ],
   "permissions": [
-    "core:default",
-    "opener:default",
-    "dialog:default"
+    "dialog:default",
+    "opener:allow-reveal-item-in-dir"
   ]
 }

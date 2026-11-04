@@ -112,7 +112,7 @@ impl RemoteZip {
                 .await
                 .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
-            Ok::<_, pyo3::PyErr>(scan.files)
+            Ok::<_, pyo3::PyErr>(scan.tree())
         })?;
 
         self.files = files.iter().map(FileEntry::from).collect();

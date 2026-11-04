@@ -1,18 +1,11 @@
-# Lazy ZIP Explorer — Desktop App
+# Lazy ZIP desktop app
 
-Cross-platform desktop application built with [Tauri](https://tauri.app/) + [Svelte](https://svelte.dev/).
-
-Browse and download files from remote ZIP archives without downloading the entire archive.
-
-## Getting Started
+Built with [Tauri](https://tauri.app/) and [Svelte](https://svelte.dev/). See the [main README](../README.md) for what it does.
 
 ```bash
-npm install
-npm run tauri dev
-```
-
-## Build
-
-```bash
-npm run tauri build
+npm ci
+npm run tauri dev    # Run the app
+npm test             # Frontend tests
+npm run check        # Type checks
+npm run tauri build  # Build installers
 ```

@@ -5,3 +5,9 @@ members = [
     "desktop/src-tauri"
 ]
 resolver = "2"
+
+[workspace.package]
+version = "0.1.2"
+edition = "2021"
+license = "MIT"
+authors = ["Alen Paul Varghese"]

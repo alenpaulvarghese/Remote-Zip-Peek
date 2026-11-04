@@ -1,70 +1,171 @@
 name: Release
 
+# Raising the version in the root Cargo.toml on master is what makes a release. Use "Run workflow"
+# to retry a failed release, or to release the current version without raising it.
 on:
   push:
-    tags:
-      - "v*"
+    branches: [master]
+    paths: [Cargo.toml]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  check-version:
+    name: Check Version
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.decide.outputs.should_release }}
+      version: ${{ steps.decide.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PREVIOUS_COMMIT: ${{ github.event.before }}
+        run: .github/scripts/should-release.sh "$EVENT_NAME" "$PREVIOUS_COMMIT"
+
+  verify:
+    name: Verify
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    uses: ./.github/workflows/ci.yml
+
+  # Building runs third-party code from dependencies, so it gets no write access or cache.
+  build:
+    name: Build (${{ matrix.name }})
+    needs: verify
+    runs-on: ${{ matrix.platform }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: ubuntu-22.04
-            args: ""
+          - name: Linux
+            artifact: linux
+            platform: ubuntu-22.04
+            args: "--bundles deb -- --locked"
             rust_target: ""
-          - platform: macos-latest
-            args: "--target aarch64-apple-darwin"
+          - name: macOS Apple Silicon
+            artifact: macos-arm64
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin --bundles dmg -- --locked"
             rust_target: "aarch64-apple-darwin"
-          - platform: macos-latest
-            args: "--target x86_64-apple-darwin"
+          - name: macOS Intel
+            artifact: macos-x64
+            platform: macos-latest
+            args: "--target x86_64-apple-darwin --bundles dmg -- --locked"
             rust_target: "x86_64-apple-darwin"
-          - platform: windows-latest
-            args: ""
+          - name: Windows
+            artifact: windows
+            platform: windows-latest
+            args: "--bundles msi,nsis -- --locked"
             rust_target: ""
-
-    runs-on: ${{ matrix.platform }}
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.rust_target }}
 
       - name: Install system dependencies (Linux)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
 
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build & bundle Tauri app
-        uses: tauri-apps/tauri-action@v0
+      - name: Build installers
+        working-directory: desktop
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_ARGS: ${{ matrix.args }}
+        shell: bash
+        run: npm run tauri build -- $BUILD_ARGS
+
+      # A library from Homebrew would be missing on users' machines, and the app wouldn't launch.
+      - name: Check the macOS app only links system libraries
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          binary=$(find target -path '*/release/lazy-zip' -type f | head -n 1)
+          if [ -z "$binary" ]; then
+            echo "Couldn't find the built app" >&2
+            exit 1
+          fi
+          otool -L "$binary"
+          if otool -L "$binary" | tail -n +2 | grep -vE '^\s+(/usr/lib/|/System/Library/)'; then
+            echo "The app links a library that won't exist on users' machines" >&2
+            exit 1
+          fi
+
+      - name: Upload installers
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          projectPath: desktop
-          tagName: ${{ github.ref_name }}
-          releaseName: "Lazy ZIP Explorer ${{ github.ref_name }}"
-          releaseBody: "See the assets below to download the installer for your platform."
-          releaseDraft: true
-          prerelease: false
-          args: ${{ matrix.args }}
+          name: installers-${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            target/**/release/bundle/deb/*.deb
+            target/**/release/bundle/dmg/*.dmg
+            target/**/release/bundle/msi/*.msi
+            target/**/release/bundle/nsis/*.exe
+
+  # Nothing is public until every build has passed.
+  publish:
+    name: Publish Release
+    needs: [check-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      TAG: v${{ needs.check-version.outputs.version }}
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: downloaded
+
+      - name: Collect installers and write checksums
+        run: |
+          mkdir release
+          find downloaded -type f -exec mv {} release/ \;
+          # GitHub changes spaces in asset names, which would break the checksum file.
+          for file in release/*; do mv "$file" "${file// /-}"; done
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          cat release/SHA256SUMS.txt
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: release/*
+
+      - name: Publish
+        run: |
+          gh release create "$TAG" release/* --target "$GITHUB_SHA" --latest \
+            --title "Lazy ZIP $TAG" --generate-notes \
+            --notes "These builds aren't signed yet, so macOS and Windows will warn the first time you open the app. See the README for how to open it, and how to verify a download."

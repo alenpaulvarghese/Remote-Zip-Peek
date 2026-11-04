@@ -5,45 +5,54 @@ on:
     branches: [master, main]
   pull_request:
     branches: [master, main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  check-core:
-    name: Check Core
-    runs-on: ubuntu-latest
+  test-core:
+    name: Test Core (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy (core)
-        run: cargo clippy -p lazy-zip-core -- -D warnings
-
-      - name: Build (core)
-        run: cargo build -p lazy-zip-core --verbose
-
-      - name: Test (core)
-        run: cargo test -p lazy-zip-core --verbose
+      - name: Test
+        run: cargo test -p lazy-zip-core --locked
 
   check-desktop:
-    name: Check Desktop
+    name: Check Desktop and Workspace
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy, rustfmt
 
       - name: Install system dependencies
         run: |
@@ -51,20 +60,64 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 20
+          node-version-file: .nvmrc
 
       - name: Install frontend dependencies
         working-directory: desktop
         run: npm ci
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
-
-      - name: Clippy (desktop)
-        run: cargo clippy -p desktop -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all -- --check
 
       - name: Svelte check
         working-directory: desktop
         run: npm run check
+
+      - name: Frontend tests
+        working-directory: desktop
+        run: npm test
+
+      - name: Build frontend
+        working-directory: desktop
+        run: npm run build
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Clippy, including the Python bindings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Test desktop
+        run: cargo test -p desktop --locked
+
+  audit-npm:
+    name: Audit Frontend Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+
+      - name: Audit production dependencies
+        working-directory: desktop
+        run: npm audit --omit=dev --audit-level=high
+
+  audit-rust:
+    name: Audit Rust Dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Check advisories, licenses and sources
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
