@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 reqwest = { version = "0.13", default-features = false }
-async_zip = { version = "0.0.18", features = ["tokio", "deflate", "deflate64", "bzip2", "zstd", "lzma", "xz"] }
+async_zip = { version = "0.0.19", features = ["tokio", "deflate", "deflate64", "bzip2", "zstd", "lzma", "xz"] }
 # Linked statically so the app doesn't depend on a liblzma installed on the build machine.
 liblzma = { version = "0.4", features = ["static"] }
 tokio-util = { version = "0.7", features = ["compat", "io", "rt"] }
