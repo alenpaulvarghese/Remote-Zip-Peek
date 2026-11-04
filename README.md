@@ -17,7 +17,7 @@ Lazy ZIP reads an archive's table of contents using HTTP Range requests, so you 
 
 ## Download
 
-Get the latest version from the [Releases](https://github.com/alenpaulvarghese/Remote-Zip-Peek/releases) page.
+Get the latest version from the [Releases](https://github.com/alenpaulvarghese/lazy-zip/releases) page.
 
 | Platform | File |
 |----------|------|
@@ -40,7 +40,7 @@ Each release includes `SHA256SUMS.txt`, and a provenance attestation showing the
 
 ```bash
 shasum -a 256 --ignore-missing -c SHA256SUMS.txt
-gh attestation verify <file> --repo alenpaulvarghese/Remote-Zip-Peek
+gh attestation verify <file> --repo alenpaulvarghese/lazy-zip
 ```
 
 ## How much data does it use?
@@ -91,8 +91,8 @@ curl -sI -H 'Range: bytes=0-99' '<url>' | head -n 1
 You need Rust, Node.js 22 and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your platform.
 
 ```bash
-git clone https://github.com/alenpaulvarghese/Remote-Zip-Peek.git
-cd Remote-Zip-Peek/desktop
+git clone https://github.com/alenpaulvarghese/lazy-zip.git
+cd lazy-zip/desktop
 npm ci
 npm run tauri build
 ```
